@@ -8,8 +8,11 @@
 
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.mllib.linalg.{Vector, Vectors}
+import org.apache.spark.mllib.linalg.{Matrices, Vectors}
+import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.stat.{MultivariateStatisticalSummary, Statistics}
+import org.apache.spark.mllib.random.RandomRDDs._
+import org.apache.spark.mllib.stat.KernelDensity
 
 object IrisData {
 
@@ -21,7 +24,7 @@ object IrisData {
     val sc = new SparkContext(conf)
 
     // 读取样本数据 花萼长度、宽度、花瓣长度、花瓣宽度-> 鸢尾花属性 Setosa，Versicolour，Virginica
-    val irisRDD = sc.textFile("D:\\dataware\\testdata\\iris.data")
+    val irisRDD = sc.textFile("D:\\loewwu\\dataroom\\iris.data")
     //irisRDD.take(100).foreach(println)
 
     // 摘要统计 summary statistics
@@ -73,15 +76,96 @@ object IrisData {
     val fractions = Map("female"->0.6,"male"->0.4)
     // 采用sampleByKey的方式抽样
     val approxSample = dataSex.sampleByKey(withReplacement = false, fractions,1)
-    approxSample.collect().foreach{println}
+    //approxSample.collect().foreach{println}
 
     println("------------------------------------")
 
     // 采用sampleByKeyExact方法抽样,置信度更高
     val exactSample = dataSex.sampleByKeyExact(withReplacement = false, fractions,1)
-    exactSample.collect().foreach{println}
+    // exactSample.collect().foreach{println}
 
+    // 取出iris数据集中的前两条数据v1和v2
+    val v1 = irisRDD.map(_.split(",")).map( p=>
+    Vectors.dense(p(0).toDouble, p(1).toDouble, p(2).toDouble, p(3).toDouble)).first
 
+    // println(v1)
+
+    val v2 = irisRDD.map(_.split(",")).map(p =>
+      Vectors.dense(p(0).toDouble, p(1).toDouble, p(2).toDouble, p(3).toDouble)).take(2).last
+
+    // println(v2)
+
+    //适合度检验
+    val goodnessOfFitTestResult = Statistics.chiSqTest(v2)
+    //println(goodnessOfFitTestResult)
+
+    // 独立性检验
+    val mat = Matrices.dense(2,2,Array(v1(0),v1(1),v2(0),v2(1)))
+
+    // println(mat)
+
+    val indenpTestResult = Statistics.chiSqTest(mat)
+
+    // println(indenpTestResult)
+
+    //可以把v1作为样本，把v2作为期望值，进行卡方检验
+    val c1 = Statistics.chiSqTest(v1, v2)
+    // println(c1)
+
+    val obs = irisRDD.map{ line =>
+      val parts = line.split(",")
+      LabeledPoint(
+        if(parts(4)=="Iris-setosa")
+          0.toDouble
+        else if (parts(4)=="Iris-versicolor")
+          1.toDouble
+        else 2.toDouble, Vectors.dense(parts(0).toDouble,parts(1).toDouble,parts(2).toDouble,parts(3).toDouble))
+    }
+
+    //obs.take(10).foreach(println)
+
+    // 进行独立性检验，返回一个包含每个特征对于标签的卡方检验的数组
+    val featureTestResults= Statistics.chiSqTest(obs)
+
+    // 打印结果值
+    /*
+    var i = 1
+
+    featureTestResults.foreach { result =>
+      println(s"Column $i:\n$result")
+      i += 1
+    }*/
+
+    // Kolmogorov-Smirnov 检验
+    val test = irisRDD.map(_.split(",")).map(p => p(0).toDouble)
+    val testResult = Statistics.kolmogorovSmirnovTest(test, "norm", 0, 1)
+
+    // println(testResult)
+
+    val myCDF:Double => Double = (p=>p*2)
+
+    val testResult2 = Statistics.kolmogorovSmirnovTest(test, myCDF)
+
+    // println(testResult2)
+
+    // 随机数生成 Random data generation,Random RDDs包下现支持正态分布、泊松分布和均匀分布三种分布方式
+
+    // 生成1000000个服从正态分配N(0,1)的RDD[Double]，并且分布在 10 个分区中
+    val u = normalRDD(sc, 10000000L, 1)
+    // u.take(1000).foreach(println)
+    // u.saveAsTextFile("D:\\testNormal")
+
+    val v = u.map(x => 1.0 + 2.0 * x)
+    //v.take(100).foreach(println)
+
+    // 核密度估计 Kernel density estimation,setBandwidth表示高斯核的宽度，为一个平滑参数，可以看做是高斯核的标准差
+    val testv1 = irisRDD.map(_.split(",")).map( p => p(0).toDouble)
+
+    val kd = new KernelDensity().setSample(testv1).setBandwidth(3.0)
+
+    // 构造了核密度估计kd，就可以对给定数据数据进行核估计
+    val densities = kd.estimate(Array(-1.0, 2.0, 5.0, 5.8))
+    densities.take(100).foreach(println)
   }
 
 }
@@ -95,3 +179,16 @@ sampleByKey 和 sampleByKeyExact 的区别在于 sampleByKey 每次都通过给�
 withReplacement	每次抽样是否有放回
 fractions	控制不同key的抽样率
 seed	随机数种子
+-- 验证一组观察值的次数分配是否异于理论上的分配。其 H0假设（虚无假设，null hypothesis）为一个样本中已发生事件的次数分配会服从某个特定的理论分配。
+实际执行多项式试验而得到的观察次数，与虚无假设的期望次数相比较，检验二者接近的程度，利用样本数据以检验总体分布是否为某一特定分布的统计方法。
+method: 方法。这里采用pearson方法。
+
+statistic： 检验统计量。简单来说就是用来决定是否可以拒绝原假设的证据。检验统计量的值是利用样本数据计算得到的，它代表了样本中的信息。检验统计量的绝对值越大，拒绝原假设的理由越充分，反之，不拒绝原假设的理由越充分。
+
+degrees of freedom：自由度。表示可自由变动的样本观测值的数目，
+
+pValue：统计学根据显著性检验方法所得到的P 值。一般以P < 0.05 为显著， P<0.01 为非常显著，其含义是样本间的差异由抽样误差所致的概率小于0.05 或0.01。
+
+一般来说，假设检验主要看P值就够了。在本例中pValue =0.133，说明两组的差别无显著意义。通过V1的观测值[5.1, 3.5, 1.4, 0.2]，无法拒绝其服从于期望分配（这里默认是均匀分配）的假设。
+
+-- 卡方独立性检验是用来检验两个属性间是否独立。其中一个属性做为行，另外一个做为列，通过貌似相关的关系考察其是否真实存在相关性。
