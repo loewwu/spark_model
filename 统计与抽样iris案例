@@ -1,0 +1,97 @@
+-- 针对iris数据进行下列统计工作：
+概括统计 summary statistics
+相关性 correlations
+分层抽样 Stratified sampling
+假设检验 hypothesis testing
+随机数生成 random data generation
+核密度估计 Kernel density estimation
+
+import org.apache.log4j.{Level, Logger}
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.mllib.linalg.{Vector, Vectors}
+import org.apache.spark.mllib.stat.{MultivariateStatisticalSummary, Statistics}
+
+object IrisData {
+
+  def main(args: Array[String]): Unit = {
+    val rootLogger = Logger.getRootLogger()
+    rootLogger.setLevel(Level.WARN)
+
+    val conf = new SparkConf().setAppName("market_activity").setMaster("local[2]")
+    val sc = new SparkContext(conf)
+
+    // 读取样本数据 花萼长度、宽度、花瓣长度、花瓣宽度-> 鸢尾花属性 Setosa，Versicolour，Virginica
+    val irisRDD = sc.textFile("D:\\dataware\\testdata\\iris.data")
+    //irisRDD.take(100).foreach(println)
+
+    // 摘要统计 summary statistics
+    val observations = irisRDD.map(_.split(",")).map(p =>
+      Vectors.dense(p(0).toDouble, p(1).toDouble, p(2).toDouble, p(3).toDouble))
+
+    val summary = Statistics.colStats(observations)
+
+    // 打印统计结果
+    /*println(summary.count)  //列大小
+    println(summary.mean)  // 每列均值
+    println(summary.variance) // 每列方差
+    println(summary.max)  // 每列最大值
+    println(summary.min)  // 每列最小值
+    println(summary.normL1) // 每列的L1范数
+    println(summary.normL2) // 每列的L2范数
+    println(summary.numNonzeros) // 每列非零向量个数*/
+
+    // 判断两个因素的相关性
+    val seriesX = irisRDD.map(_.split(",")).map(p => p(0).toDouble)
+    val seriesY = irisRDD.map(_.split(",")).map(p => p(1).toDouble)
+    val seriesZ = irisRDD.map(_.split(",")).map(p => p(2).toDouble)
+    val seriesW = irisRDD.map(_.split(",")).map(p => p(3).toDouble)
+
+    val correlation = Statistics.corr(seriesX, seriesY)
+    //println(correlation)
+
+    // 查看两个变量之间的相关性
+    val data = irisRDD.map(_.split(",")).map(p => Vectors.dense(p(0).toDouble, p(1).toDouble))
+    val correMatrix1 = Statistics.corr(data, "pearson")
+
+    // println(correMatrix1)
+
+    // 分层抽样
+    val dataSex = sc.makeRDD( Array(
+      ("female","Lily"),
+      ("female","Lucy"),
+      ("female","Emily"),
+      ("female","Kate"),
+      ("female","Alice"),
+      ("female","julie"),
+      ("male","Tom"),
+      ("male","Roy"),
+      ("male","David"),
+      ("male","Frank"),
+      ("male","Jack"),
+      ("male","loewwu")))
+
+    val fractions = Map("female"->0.6,"male"->0.4)
+    // 采用sampleByKey的方式抽样
+    val approxSample = dataSex.sampleByKey(withReplacement = false, fractions,1)
+    approxSample.collect().foreach{println}
+
+    println("------------------------------------")
+
+    // 采用sampleByKeyExact方法抽样,置信度更高
+    val exactSample = dataSex.sampleByKeyExact(withReplacement = false, fractions,1)
+    exactSample.collect().foreach{println}
+
+
+  }
+
+}
+
+sampleByKey 和 sampleByKeyExact 的区别在于 sampleByKey 每次都通过给定的概率以一种类似于掷硬币的方式来决定这个观察值是否被放入样本，
+因此一遍就可以过滤完所有数据，最后得到一个近似大小的样本，但往往不够准确。而 sampleByKeyExtra 会对全量数据做采样计算。对于每个类别，
+其都会产生 （fk⋅nk）个样本，其中fk是键为k的样本类别采样的比例；nk是键k所拥有的样本数。 sampleByKeyExtra 采样的结果会更准确，
+有99.99%的置信度，但耗费的计算资源也更多。
+注：
+参数	含义
+withReplacement	每次抽样是否有放回
+fractions	控制不同key的抽样率
+seed	随机数种子
